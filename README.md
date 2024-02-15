@@ -34,7 +34,7 @@ Place the models in the `models/` directory.
 
 ## Usage
 
-To run tracking on a dataset:
+To run tracking evaluation method on a dataset:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python3 eval.py --input_folder /path/to/dataset --mode retinanet_resnet50_fpn_v2 --embedder torchreid --global_reid_model_wts osnet_ibn_x1_0_msmt17_combineall_256x128_amsgrad_ep150_stp60_lr0.0015_b64_fb10_softmax_labelsmooth_flip_jitter --cls 1 2 3  
@@ -42,17 +42,8 @@ CUDA_VISIBLE_DEVICES=0 python3 eval.py --input_folder /path/to/dataset --mode re
 
 This will perform detection, tracking, re-id and output tracking results to `outputs/`.  
 
-See `options.py` for additional parameters.
-
-## Evaluation
-
-Tracking results can be evaluated using:  
-
-```bash
-python evaluate.py --groundtruths /path/to/groundtruths --results /path/to/results  
-```
-
-Evaluation code computes ID measures like ID Precision, ID Recall, ID F1 Score.
+See `eval.py` for additional parameters.
+Evaluation code computes novel MMCMT metric as well as ID Precision, ID Recall, ID F1 Score
 
 ## References
 
