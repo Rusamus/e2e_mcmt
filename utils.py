@@ -252,7 +252,6 @@ def bcubed_eval(hyp_obj_pairs):
     mean_p = AVERAGE_PRECISION / precision_items
     mean_r = AVERAGE_RECALL / recall_items
     mean_fp_rate = AVERAGE_FP / precision_items
-    print("mean_fp_rate", mean_fp_rate, "1-mean_p", 1-mean_p, "mean_p", mean_p)
     return (mean_p, mean_r, mean_fp_rate)
 
 
@@ -324,7 +323,12 @@ def convert_tracks(hyp_obj_pair, track2cluster):
     return final_tracks
 
 
-def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs'):
+import os
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs', scale_factor=1.5):
     """Save img with precision/recall curve for end-to-end pipeline"""
     path_to_save = os.path.join(results_path, 'MCMT_result.png')
 
@@ -342,7 +346,7 @@ def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs'):
 
     # Plot PR curve using Seaborn
     sns.set_theme(style="whitegrid")
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(8*scale_factor, 6*scale_factor))  # Scale the figure size
 
     # Plot original precision-recall curve and fill area above it
     sns.lineplot(x=recalls, y=precisions, label=f'End-to-end quality: {AUC_PR:.3f}', color='blue')
@@ -359,10 +363,6 @@ def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs'):
 
     plt.fill_between(x_data, y_data, y_data[0], color='cyan', alpha=0.3, label='re-ID Error')
 
-    # Plot horizontal line at the FP detectors
-    # type1_error = 1 - precisions[0]  # FP detectors + tracker error
-    # tracker_error = type1_error - fp_rate[0]
-
     # Plot horizontal line at the starting precision
     plt.axhline(y=precisions[0], color='black', linestyle='--')
     # Plot vertical line at the ending recall
@@ -374,10 +374,10 @@ def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs'):
     plt.axhline(y=precisions[0] + fp_rate[0], color='black', linestyle='--')
     plt.fill_between([0, recalls[-1]], precisions[0], precisions[0] + fp_rate[0], color='black', alpha=0.3, label='Detector Error (FP)')
 
-    plt.ylabel('Precision')
-    plt.xlabel('Recall')
-    plt.legend()
-    plt.title('MCMT: Errors Classification')
+    plt.ylabel('Precision', fontsize=14*scale_factor)  # Adjust font size
+    plt.xlabel('Recall', fontsize=14*scale_factor)  # Adjust font size
+    plt.legend(fontsize=12*scale_factor, loc='lower left')  # Adjust font size and position
+    plt.title('MCMT: Errors Classification', fontsize=16*scale_factor)  # Adjust font size
     plt.ylim((0, 1.0))
     plt.xlim((0, 1.0))
 
@@ -414,3 +414,24 @@ def get_global_reid_model(args):
         device='cuda',
     )
     return global_reid_model
+
+
+def check_is_roi(bbox, roi):
+    xmin = bbox[0]
+    ymin = bbox[1]
+    xmax = bbox[0] + bbox[2]
+    ymax = bbox[1] + bbox[3]
+    height, width = roi.shape
+
+    if xmin >= 0 and xmin < width:
+        if ymin >= 0 and ymin < height and roi[ymin, xmin] == 255:
+            return True
+        if ymax >= 0 and ymax < height and roi[ymax, xmin] == 255:
+            return True
+    if xmax >= 0 and xmax < width:
+        if ymin >= 0 and ymin < height and roi[ymin, xmax] == 255:
+            return True
+        if ymax >= 0 and ymax < height and roi[ymax, xmax] == 255:
+            return True
+
+    return False

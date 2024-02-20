@@ -44,7 +44,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--threshold',
-        default=0.8,
+        default=0.95,
         help='score threshold to filter out detections',
         type=float
     )
@@ -92,6 +92,17 @@ if __name__ == "__main__":
             "osnet_ibn_x1_0_msmt17_combineall_256x128_amsgrad_ep150_stp60_lr0.0015_b64_fb10_softmax_labelsmooth_flip_jitter"
         ]
     )
+    parser.add_argument(
+        '--use_roi',
+        action='store_true',
+        help='whether to use ROI to filter out outliers',
+    )
+    parser.add_argument(
+        '--nms_max_overlap',
+        default=1.0,
+        help='nms filter for detector',
+        type=float
+    )
     args = parser.parse_args()
 
     np.random.seed(42)
@@ -116,7 +127,7 @@ if __name__ == "__main__":
     # TODO: run function below in concurrent mode (#proc = #cameras)
     hyp_obj_pairs = []
     for num_camera, camera in enumerate(cameras):
-        pairs = camera_tracker(args, camera, device, OUT_DIR, COLORS, num_camera)
+        pairs = camera_tracker(args, camera, device, OUT_DIR, COLORS, num_camera, args.use_roi)
         hyp_obj_pairs.extend(pairs)
 
     evaluate(OUT_DIR, hyp_obj_pairs)

@@ -9,30 +9,40 @@ import pandas as pd
 import torch
 import torchvision
 import motmetrics as mm
+from PIL import Image
 
 from torchvision.transforms import ToTensor
 from deep_sort_realtime.deepsort_tracker import DeepSort
-from utils import (convert_detections, annotate, get_gt_bboxes,
-                   get_box_assigment_list, get_global_reid_model)
+from utils import (convert_detections,
+                   annotate, get_gt_bboxes,
+                   get_box_assigment_list,
+                   get_global_reid_model,
+                   check_is_roi)
 
 warnings.filterwarnings("ignore")
 np.set_printoptions(threshold=np.inf)
 
 
-def camera_tracker(args, video_path, device, out_dir, colors, num_camera, roi=None):
+def camera_tracker(args, video_path, device, out_dir, colors, num_camera, use_roi=False):
 
     # Models
     model = getattr(torchvision.models.detection, args.model)(weights='DEFAULT')
     model.eval().to(device)
 
     # tracker model
-    tracker = DeepSort(max_age=30, embedder=args.embedder, bgr=False,
+    tracker = DeepSort(
+            max_age=30,
+            embedder=args.embedder,
+            bgr=False,
+            nms_max_overlap=args.nms_max_overlap,
             embedder_model_name=args.global_reid_model_name,
+            # max_cosine_distance=0.8,
             embedder_wts=os.path.join('reid/weights', f"{args.global_reid_model_wts}.pth"))
+
+    # tracker = DeepSort(max_age=30, embedder=args.embedder, bgr=False)
 
     # re-ID model
     global_reid_model = get_global_reid_model(args)
-
 
     # Video stream
     cap = cv2.VideoCapture(video_path)
@@ -64,6 +74,10 @@ def camera_tracker(args, video_path, device, out_dir, colors, num_camera, roi=No
         'bbox_width', 'bbox_height', 'det_score',
         'class', 'visibility', 'stuff'],
                         index_col=False)
+
+    if use_roi:
+        roi_path = video_path.replace('.mp4', 'roi.jpg')
+        roi_mask = np.asarray(Image.open(roi_path))
 
     with open(outfile, 'w') as file:
         writer = csv.writer(file, delimiter=',')
@@ -139,7 +153,10 @@ def camera_tracker(args, video_path, device, out_dir, colors, num_camera, roi=No
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
 
-                # MOT format
+                gt_bboxes, gt_ids = get_gt_bboxes(gt_camera, frame_count)
+                # TODO: skip frame if gt isn't provided/ N.B. might be FP
+                # if len(gt_bboxes) == 0:
+                #     continue
 
                 pred_bboxes = []
                 pred_ids = []
@@ -147,7 +164,10 @@ def camera_tracker(args, video_path, device, out_dir, colors, num_camera, roi=No
                     if track.original_ltwh is not None:
                         x, y, w, h = map(int, track.original_ltwh)
 
-                        # TODO: filter out boxes withing ROI
+                        if use_roi:
+                            flag = check_is_roi([x, y, w, h], roi_mask)
+                            if not flag:
+                                continue
 
                         pred_bboxes.append([x, y, w, h])
                         pred_ids.append(track.track_id)
@@ -165,9 +185,6 @@ def camera_tracker(args, video_path, device, out_dir, colors, num_camera, roi=No
                             descriptor
                         ]
                         writer.writerow(line)
-
-                gt_bboxes, gt_ids = get_gt_bboxes(gt_camera, frame_count)
-                # TODO: skip frame if gt aren't provided
 
                 dists = mm.distances.iou_matrix(gt_bboxes, pred_bboxes)
                 acc.update(
