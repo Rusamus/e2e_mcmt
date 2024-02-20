@@ -133,10 +133,11 @@ dmypy.json
 .Trashes
 ._*
 
-# ReID
+# MMCMT
 data/
 archive_input/
 input/
 outputs/
 reid/
 deep-person-reid/
+playground.ipynb
