@@ -15,7 +15,7 @@ The system pipeline consists of:
 Clone the repository:
 
 ```bash
-git clone https://github.com/<your-username>/mcmt-tracking.git
+https://github.com/Rusamus/mmcmt_metric.git
 ```
 
 Install dependencies:
