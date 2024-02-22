@@ -98,7 +98,6 @@ def evaluate(output_dir, hyp_obj_pairs):
             df_mcmt['id_global'] = df_mcmt['id'].apply(lambda x: track2cluster[x])
             df_mcmt.to_csv(os.path.join(output_dir, "computed_mcmt.csv"), index=False)
 
-    precision, recall = np.array(precision), np.array(recall)
     aidp, aidr, aidf1, auc_pr = get_metric(precision, recall)
 
     print("\n-------------------- Evaluation Metrics: --------------------")

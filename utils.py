@@ -1,10 +1,12 @@
+# flake8: noqa
+
 import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from tqdm import tqdm
 import torchvision
+from collections import Counter, defaultdict
 
 from torchreid.utils import FeatureExtractor
 
@@ -147,7 +149,7 @@ def clusterize(matrix_dist, threshold, index2track):
     return track2cluster
 
 
-def update_clusters_list(clusters, track, nodes):  # TODO: OPTIMIZE clique updating
+def update_clusters_list(clusters, track, nodes):
     """Find clique for curent edges[track,nodes]
     Params
     ------
@@ -179,80 +181,74 @@ def update_clusters_list(clusters, track, nodes):  # TODO: OPTIMIZE clique updat
     return clusters
 
 
-def bcubed_eval(hyp_obj_pairs):
-    """cluster evaluation function
-    Based on https://link.springer.com/article/10.1007/s10791-008-9066-8
+def bcubed_eval(pairs):
+    """
+    Cluster evaluation function based on https://link.springer.com/article/10.1007/s10791-008-9066-8
 
     Params
     ------
-    hyp_obj_pairs: list
-        list of tuples where:
+    pairs: list
+        List of tuples where:
             (i_pred_cluster, j_gt_label) - correct assignment
-            (i_pred_cluster, -1) - fp
-            (-1, j_gt_label) - fn
+            (i_pred_cluster, -1) - false positive
+            (-1, j_gt_label) - false negative
 
     Returns
     ------
-    (mean_p, mean_r): tuple
-        mean (precision, recall) per threshold
+    (mean_p, mean_r, mean_fp): tuple
+        Mean (precision, recall, false positive rate) per threshold
     """
+    h2o = defaultdict(list)
+    o2h = defaultdict(list)
 
-    AVERAGE_PRECISION = 0.0
-    AVERAGE_RECALL = 0.0
-    AVERAGE_FP = 0.0
-    recall_items = 0
-    precision_items = 0
-    used_pairs = set()
+    for pair in pairs:
+        h2o[pair[0]].append(pair[1])
+        o2h[pair[1]].append(pair[0])
 
-    hyp_obj_pairs = sorted(hyp_obj_pairs)
-    for pair in tqdm(hyp_obj_pairs):
-        if pair in used_pairs:
+    P = 0
+    R = 0
+    FP = 0
+    FREQ = 0
+
+    for key in h2o:
+        if key == -1:
             continue
 
-        tp = 0
-        same_cluster = 0
-        same_label = 0
+        cluster = Counter(h2o[key])
+        cluster_size = len(h2o[key])
 
-        if pair[0] == pair[1] == -1:
-            print('\n\n\n\n\n')
-            print('pair[0] == pair[0] == -1')
-            print('\n\n\n\n\n')
+        for item, freq in cluster.items():
+            if item == -1:
+                FREQ += freq
+                continue
 
-        if pair[1] == -1:  # FP
-            AVERAGE_PRECISION += 0
-            precision_items += 1
-            AVERAGE_FP += 1
+            P += freq * freq / cluster_size
+            FREQ += freq
+
+    mean_p = P / FREQ
+
+    FREQ = 0
+
+    for key in o2h:
+        if key == -1:
+            FP += len(o2h[key])
             continue
 
-        if pair[0] == -1:  # FN
-            AVERAGE_RECALL += 0
-            recall_items += 1
-            continue
+        cluster = Counter(o2h[key])
+        cluster_size = len(o2h[key])
 
-        for item in hyp_obj_pairs:
-            if item[0] == pair[0]:
-                same_cluster += 1
-                if item[1] == pair[1]:
-                    tp += 1
+        for item, freq in cluster.items():
+            if item == -1:
+                FREQ += freq
+                continue
 
-            if item[1] == pair[1]:
-                same_label += 1
+            R += freq * freq / cluster_size
+            FREQ += freq
 
-        p = tp / same_cluster
-        assert p <= 1
-        AVERAGE_PRECISION += p * tp
-        precision_items += tp
+    mean_r = R / FREQ
+    mean_fp = FP / FREQ
 
-        r = tp / same_label
-        assert r <= 1
-        AVERAGE_RECALL += r * tp
-        recall_items += tp
-        used_pairs.add(pair)
-
-    mean_p = AVERAGE_PRECISION / precision_items
-    mean_r = AVERAGE_RECALL / recall_items
-    mean_fp_rate = AVERAGE_FP / precision_items
-    return (mean_p, mean_r, mean_fp_rate)
+    return mean_p, mean_r, mean_fp
 
 
 def scale_gt_bbox(gt_bboxes, original_hw, target_hw):
@@ -323,30 +319,32 @@ def convert_tracks(hyp_obj_pair, track2cluster):
     return final_tracks
 
 
-import os
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
+def extrapolate_until_axes(precision, recall):
+    """Extrapolate precision and recall arrays until axes (0,0) and (1,1)"""
+    p = precision.copy()
+    r = recall.copy()
+    p = [p[0]] + p + [0]
+    r = [0] + r + [r[-1]]
+    return p, r
+
+
+def calculate_pr_auc(precision, recall):
+    """Calculate PR AUC (area under PR curve)"""
+    
+    precision, recall = extrapolate_until_axes(precision, recall)
+    auc_pr = np.trapz(precision, recall)
+    return auc_pr
+
 
 def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs', scale_factor=1.5):
     """Save img with precision/recall curve for end-to-end pipeline"""
     path_to_save = os.path.join(results_path, 'MCMT_result.png')
+    AUC_PR = calculate_pr_auc(precisions, recalls)
 
-    curve = np.column_stack((recalls, precisions))
-    curve = np.unique(curve, axis=0)
-    curve = sorted(curve, key=lambda x: (x[0], -x[1]))
-    curve = np.asarray(curve)
-
-    # Extrapolate curve until axes
-    curve = np.concatenate(([[0, curve[0][1]]], curve, [[curve[-1][0], 0]]), axis=0)
-
-    precisions, recalls = curve[:, 1], curve[:, 0]
-    AUC_PR = calculate_auc_pr(precisions, recalls)
-    print(f"AUC_PR: {AUC_PR}")
 
     # Plot PR curve using Seaborn
     sns.set_theme(style="whitegrid")
-    plt.figure(figsize=(8*scale_factor, 6*scale_factor))  # Scale the figure size
+    plt.figure(figsize=(8*scale_factor, 8*scale_factor))
 
     # Plot original precision-recall curve and fill area above it
     sns.lineplot(x=recalls, y=precisions, label=f'End-to-end quality: {AUC_PR:.3f}', color='blue')
@@ -361,23 +359,27 @@ def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs', scale_
     x_data = lines[0].get_xdata()
     y_data = lines[0].get_ydata()
 
-    plt.fill_between(x_data, y_data, y_data[0], color='cyan', alpha=0.3, label='re-ID Error')
-
     # Plot horizontal line at the starting precision
     plt.axhline(y=precisions[0], color='black', linestyle='--')
     # Plot vertical line at the ending recall
     plt.axvline(x=recalls[-1], color='black', linestyle='--')
 
-    plt.fill_between([0, recalls[-1]], precisions[0] + fp_rate[0], 1, color='yellow', alpha=0.3, label='Tracker Error')
-    plt.fill_between([recalls[-1], 1], 0, 1, color='red', alpha=0.3, label='Detector Error (FN)')
+    tr_error = 1 - fp_rate[0] - precisions[0]
+    plt.fill_between([0, recalls[-1]], precisions[0] + fp_rate[0], 1, color='yellow', alpha=0.3, label=f'Tracker Error: {tr_error:.3f}')
+
+    fn_error = 1 - recalls[-1]
+    plt.fill_between([recalls[-1], 1], 0, 1, color='red', alpha=0.3, label=f'Detector Error (FN): {fn_error:.3f}')
 
     plt.axhline(y=precisions[0] + fp_rate[0], color='black', linestyle='--')
-    plt.fill_between([0, recalls[-1]], precisions[0], precisions[0] + fp_rate[0], color='black', alpha=0.3, label='Detector Error (FP)')
+    plt.fill_between([0, recalls[-1]], precisions[0], precisions[0] + fp_rate[0], color='black', alpha=0.3, label=f'Detector Error (FP): {fp_rate[0]:.3f}')
 
-    plt.ylabel('Precision', fontsize=14*scale_factor)  # Adjust font size
-    plt.xlabel('Recall', fontsize=14*scale_factor)  # Adjust font size
-    plt.legend(fontsize=12*scale_factor, loc='lower left')  # Adjust font size and position
-    plt.title('MCMT: Errors Classification', fontsize=16*scale_factor)  # Adjust font size
+    reID_error = 1 - fn_error - fp_rate[0] - tr_error - AUC_PR 
+    plt.fill_between(x_data, y_data, y_data[0], color='cyan', alpha=0.3, label=f're-ID Error: {reID_error:.3f}')
+
+    plt.ylabel('Precision', fontsize=12*scale_factor)
+    plt.xlabel('Recall', fontsize=12*scale_factor)
+    plt.legend(fontsize=18*scale_factor, loc='lower left')
+    plt.title('MCMT: Errors Classification', fontsize=16*scale_factor)
     plt.ylim((0, 1.0))
     plt.xlim((0, 1.0))
 
@@ -385,22 +387,12 @@ def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs', scale_
     print(path_to_save)
 
 
-def calculate_auc_pr(precision, recall):
-    """Calculate AUR-PR (area under PR curve)"""
-    i = np.array(range(1, len(recall)))
-    r_step = recall[i] - recall[i - 1]
-    p_step = precision[i] + precision[i - 1]
-    auc_pr = np.sum(r_step * p_step) / 2
-    # auc_pr = np.trapz(precision, recall)
-    return auc_pr
-
-
 def get_metric(precision, recall):
     """Provides final evaluation and returns AP, AR, AF1,
     error_per_module, plot"""
     f1_scores = [2 * (p * r) / (p + r) for p, r in zip(precision, recall)]
 
-    auc_pr = calculate_auc_pr(precision, recall)
+    auc_pr = calculate_pr_auc(precision, recall)
     return np.mean(precision), np.mean(recall), np.mean(f1_scores), auc_pr
 
 
