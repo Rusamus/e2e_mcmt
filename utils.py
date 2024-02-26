@@ -6,7 +6,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import torchvision
-from collections import Counter, defaultdict
 
 from torchreid.utils import FeatureExtractor
 
@@ -52,13 +51,13 @@ def convert_detections(detections, threshold, classes):
     return final_boxes
 
 
-def annotate(tracks, frame, resized_frame, frame_width, frame_height, colors):
+def annotate(frame, tracks, colors):
     """Annotate bounding boxes and IDs on the frame.
 
     Args:
         tracks (list): List of tracks.
         frame (numpy.ndarray): Original frame.
-        resized_frame (numpy.ndarray): Resized frame.
+        frame (numpy.ndarray): Resized frame.
         frame_width (int): Width of the original frame.
         frame_height (int): Height of the original frame.
         colors (list): List of colors for bounding box annotation.
@@ -66,14 +65,14 @@ def annotate(tracks, frame, resized_frame, frame_width, frame_height, colors):
     Returns:
         numpy.ndarray: Annotated frame.
     """
+ 
     for track in tracks:
-        if not track.is_confirmed():
-            continue
-        track_id = track.track_id
-        track_class = track.det_class
-        x1, y1, x2, y2 = track.to_ltrb()
-        p1 = (int(x1 / resized_frame.shape[1] * frame_width), int(y1 / resized_frame.shape[0] * frame_height))
-        p2 = (int(x2 / resized_frame.shape[1] * frame_width), int(y2 / resized_frame.shape[0] * frame_height))
+        track_id = track[0]
+        track_class = 1
+        x1, y1, x2, y2 = map(int, track[1:5])
+        w, h = x2 - x1, y2 - y1
+        p1 = (x1, y1)
+        p2 = (x2, y2)
         # Annotate boxes.
         color = colors[int(track_class)]
         cv2.rectangle(
@@ -181,76 +180,6 @@ def update_clusters_list(clusters, track, nodes):
     return clusters
 
 
-def bcubed_eval(pairs):
-    """
-    Cluster evaluation function based on https://link.springer.com/article/10.1007/s10791-008-9066-8
-
-    Params
-    ------
-    pairs: list
-        List of tuples where:
-            (i_pred_cluster, j_gt_label) - correct assignment
-            (i_pred_cluster, -1) - false positive
-            (-1, j_gt_label) - false negative
-
-    Returns
-    ------
-    (mean_p, mean_r, mean_fp): tuple
-        Mean (precision, recall, false positive rate) per threshold
-    """
-    h2o = defaultdict(list)
-    o2h = defaultdict(list)
-
-    for pair in pairs:
-        h2o[pair[0]].append(pair[1])
-        o2h[pair[1]].append(pair[0])
-
-    P = 0
-    R = 0
-    FP = 0
-    FREQ = 0
-
-    for key in h2o:
-        if key == -1:
-            continue
-
-        cluster = Counter(h2o[key])
-        cluster_size = len(h2o[key])
-
-        for item, freq in cluster.items():
-            if item == -1:
-                FREQ += freq
-                continue
-
-            P += freq * freq / cluster_size
-            FREQ += freq
-
-    mean_p = P / FREQ
-
-    FREQ = 0
-
-    for key in o2h:
-        if key == -1:
-            FP += len(o2h[key])
-            continue
-
-        cluster = Counter(o2h[key])
-        cluster_size = len(o2h[key])
-
-        for item, freq in cluster.items():
-            if item == -1:
-                FREQ += freq
-                continue
-
-            R += freq * freq / cluster_size
-            FREQ += freq
-
-    mean_r = R / FREQ
-    mean_fp = FP / FREQ
-
-    return mean_p, mean_r, mean_fp
-
-
 def scale_gt_bbox(gt_bboxes, original_hw, target_hw):
     """"applies scaling of gt-bboxes"""
 
@@ -301,7 +230,7 @@ def get_box_assigment_list(mota_accumulator, num_camera, filter_flags=['MATCH', 
             if np.isnan(float(hid)):
                 hid = -1
             else:
-                hid = hid + f'_c{num_camera}'
+                hid = str(int(hid)) + f'_c{num_camera}'
 
             if np.isnan(float(oid)):
                 oid = -1
@@ -336,7 +265,7 @@ def calculate_pr_auc(precision, recall):
     return auc_pr
 
 
-def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs', scale_factor=1.5):
+def save_pr_curve(precisions, recalls, fp_rate, fn_rate, results_path='./outputs', scale_factor=1.5):
     """Save img with precision/recall curve for end-to-end pipeline"""
     path_to_save = os.path.join(results_path, 'MCMT_result.png')
     AUC_PR = calculate_pr_auc(precisions, recalls)
@@ -344,7 +273,7 @@ def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs', scale_
 
     # Plot PR curve using Seaborn
     sns.set_theme(style="whitegrid")
-    plt.figure(figsize=(8*scale_factor, 8*scale_factor))
+    plt.figure(figsize=(8*scale_factor, 6*scale_factor))
 
     # Plot original precision-recall curve and fill area above it
     sns.lineplot(x=recalls, y=precisions, label=f'End-to-end quality: {AUC_PR:.3f}', color='blue')
@@ -359,22 +288,24 @@ def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs', scale_
     x_data = lines[0].get_xdata()
     y_data = lines[0].get_ydata()
 
-    # Plot horizontal line at the starting precision
-    plt.axhline(y=precisions[0], color='black', linestyle='--')
-    # Plot vertical line at the ending recall
-    plt.axvline(x=recalls[-1], color='black', linestyle='--')
+    plt.axhline(y=precisions[0], xmax=recalls[-1], color='black', linestyle='--')
+    plt.axhline(y=precisions[0] + fp_rate, xmax=recalls[-1], color='black', linestyle='--')
 
-    tr_error = 1 - fp_rate[0] - precisions[0]
-    plt.fill_between([0, recalls[-1]], precisions[0] + fp_rate[0], 1, color='yellow', alpha=0.3, label=f'Tracker Error: {tr_error:.3f}')
+    detector_error, tracker_error, reID_error = retrieve_errors(precisions, fp_rate, fn_rate, AUC_PR)
 
-    fn_error = 1 - recalls[-1]
-    plt.fill_between([recalls[-1], 1], 0, 1, color='red', alpha=0.3, label=f'Detector Error (FN): {fn_error:.3f}')
+    plt.axvline(x=recalls[-1], ymax=precisions[0] + tracker_error, color='black', linestyle='--')
 
-    plt.axhline(y=precisions[0] + fp_rate[0], color='black', linestyle='--')
-    plt.fill_between([0, recalls[-1]], precisions[0], precisions[0] + fp_rate[0], color='black', alpha=0.3, label=f'Detector Error (FP): {fp_rate[0]:.3f}')
+    x, y1, y2  = [0, recalls[-1]], precisions[0], precisions[0] + tracker_error
+    plt.fill_between(x, y1, y2, color='yellow', alpha=0.3, label=f'Tracker Error: {tracker_error:.3f}')
 
-    reID_error = 1 - fn_error - fp_rate[0] - tr_error - AUC_PR 
-    plt.fill_between(x_data, y_data, y_data[0], color='cyan', alpha=0.3, label=f're-ID Error: {reID_error:.3f}')
+    x, y1, y2 = [recalls[-1], 1], 0, 1
+    plt.fill_between([recalls[-1], 1], 0, 1, color='red', alpha=0.3, label=f'Detector Error: {detector_error:.3f}')
+
+    x, y1, y2 = [0, recalls[-1]], precisions[0] + fp_rate, 1
+    plt.fill_between(x, y1, y2, color='red', alpha=0.3)
+
+    x, y1, y2 = x_data, y_data, y_data[0]
+    plt.fill_between(x, y1, y2, color='cyan', alpha=0.3, label=f're-ID Error: {reID_error:.3f}')
 
     plt.ylabel('Precision', fontsize=12*scale_factor)
     plt.xlabel('Recall', fontsize=12*scale_factor)
@@ -385,6 +316,14 @@ def save_pr_curve(precisions, recalls, fp_rate, results_path='./outputs', scale_
 
     plt.savefig(path_to_save, bbox_inches='tight')
     print(path_to_save)
+
+def retrieve_errors(precisions, fp_rate, fn_rate, AUC_PR):
+    """makes classification of errors"""
+
+    detector_error = fn_rate + fp_rate
+    tracker_error = 1 - precisions[0] - fp_rate
+    reID_error = 1 - detector_error - tracker_error - AUC_PR 
+    return detector_error, tracker_error, reID_error
 
 
 def get_metric(precision, recall):
@@ -427,3 +366,18 @@ def check_is_roi(bbox, roi):
             return True
 
     return False
+
+def draw_tracking_results(frame, tracks, colors):
+    if len(tracks) > 0:
+        frame = annotate(frame, tracks, colors)
+    # cv2.putText(
+    #     frame,
+    #     f"FPS: {fps:.1f}",
+    #     (int(20), int(40)),
+    #     fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+    #     fontScale=1,
+    #     color=(0, 0, 255),
+    #     thickness=2,
+    #     lineType=cv2.LINE_AA
+    # )
+    return frame

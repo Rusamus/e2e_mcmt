@@ -140,4 +140,5 @@ input/
 outputs/
 reid/
 deep-person-reid/
-playground.ipynb
+*.ipynb
+mmtracking/

@@ -9,13 +9,13 @@ from sklearn.metrics.pairwise import pairwise_distances
 from tqdm import tqdm
 
 from utils import (
-    bcubed_eval,
     clusterize,
     convert_tracks,
     get_metric,
     normalize,
     save_pr_curve
 )
+from bcubed_eval import bcubed_eval
 
 
 def evaluate(output_dir, hyp_obj_pairs):
@@ -79,18 +79,17 @@ def evaluate(output_dir, hyp_obj_pairs):
     dist = pairwise_distances(descriptors, metric='euclidean')
 
     # Loop for h -> clustering -> precision/recall
-    precision, recall, fp_rate = [], [], []
+    precision, recall = [], []
     sample_rate = 100
     thresholds = np.linspace(dist.min(), dist.max(), sample_rate)
 
     for threshold in tqdm(thresholds):
         track2cluster = clusterize(dist, threshold, index2track)
         hyp_obj_pairs_h = convert_tracks(hyp_obj_pairs, track2cluster)
-        precision_h, recall_h, fp_rate_h = bcubed_eval(hyp_obj_pairs_h)
+        precision_h, recall_h, fpr_h, fnr_h = bcubed_eval(hyp_obj_pairs_h)
 
         precision.append(precision_h)
         recall.append(recall_h)
-        fp_rate.append(fp_rate_h)
 
         f1_score = 2 * (precision_h * recall_h) / (precision_h + recall_h)
         if f1_score > f1_max:
@@ -99,6 +98,8 @@ def evaluate(output_dir, hyp_obj_pairs):
             df_mcmt.to_csv(os.path.join(output_dir, "computed_mcmt.csv"), index=False)
 
     aidp, aidr, aidf1, auc_pr = get_metric(precision, recall)
+    fp_rate = fpr_h
+    fn_rate = fnr_h
 
     print("\n-------------------- Evaluation Metrics: --------------------")
     print(f"Average ID Precision (AIDP): {aidp:.3f} ")
@@ -117,4 +118,4 @@ def evaluate(output_dir, hyp_obj_pairs):
     with open(os.path.join(output_dir, "metrics_mcmt.json"), "w") as f:
         json.dump(metrics, f, indent=4)
 
-    save_pr_curve(precision, recall, fp_rate, results_path=output_dir)
+    save_pr_curve(precision, recall, fp_rate, fn_rate, results_path=output_dir)

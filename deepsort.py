@@ -154,9 +154,6 @@ def camera_tracker(args, video_path, device, out_dir, colors, num_camera, use_ro
                         break
 
                 gt_bboxes, gt_ids = get_gt_bboxes(gt_camera, frame_count)
-                # TODO: skip frame if gt isn't provided/ N.B. might be FP
-                # if len(gt_bboxes) == 0:
-                #     continue
 
                 pred_bboxes = []
                 pred_ids = []
