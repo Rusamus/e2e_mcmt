@@ -5,9 +5,12 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-import torchvision
+from torchvision.transforms import Compose, ToTensor, Resize, Normalize
+import torch
 
 from torchreid.utils import FeatureExtractor
+
+np.set_printoptions(threshold=np.inf)
 
 
 # Define a function to convert detections to SORT format.
@@ -51,7 +54,7 @@ def convert_detections(detections, threshold, classes):
     return final_boxes
 
 
-def annotate(frame, tracks, colors):
+def annotate(frame, pred_bboxes, pred_ids, colors):
     """Annotate bounding boxes and IDs on the frame.
 
     Args:
@@ -66,11 +69,10 @@ def annotate(frame, tracks, colors):
         numpy.ndarray: Annotated frame.
     """
  
-    for track in tracks:
-        track_id = track[0]
+    for bbox, track_id in zip(pred_bboxes, pred_ids):
         track_class = 1
-        x1, y1, x2, y2 = map(int, track[1:5])
-        w, h = x2 - x1, y2 - y1
+        x1, y1, w, h = map(int, bbox)
+        x2, y2 = x1 + w, y1 + h
         p1 = (x1, y1)
         p2 = (x2, y2)
         # Annotate boxes.
@@ -95,22 +97,14 @@ def annotate(frame, tracks, colors):
     return frame
 
 
-
-normalize_imgnet = torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                             std=[0.229, 0.224, 0.225])
-
-
-def reid_preprocess(bbox, args):
+def reid_preprocess(bbox, reid_input=[224, 224]):
     """makes reid preprocessing"""
-
-    global_reid_imagenet_norm = args.global_reid_imagenet_norm
-    global_reid_warp_size = args.global_reid_warp_size
-
-    resize = torchvision.transforms.Resize(global_reid_warp_size)
-    if global_reid_imagenet_norm:
-        bbox = normalize_imgnet(bbox)
-    bbox = resize(bbox)
-    return bbox[None, ...]
+    transforms = Compose([
+        ToTensor(),
+        Resize(reid_input),
+        Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+    ])
+    return transforms(bbox)[None, ...]
 
 
 def plot_dist_hist(dist_matrix):
@@ -191,11 +185,15 @@ def scale_gt_bbox(gt_bboxes, original_hw, target_hw):
     return gt_bboxes
 
 
-def get_gt_bboxes(gt_camera, frame_count):
+def get_gt_bboxes(gt_camera, frame_count, xywh_format=True):
     """look up for gt_bboxes on frame_count frame"""
 
     gt_bboxes = gt_camera[gt_camera.fr_num == frame_count].iloc[:, 2:6].values
     gt_ids = gt_camera[gt_camera.fr_num == frame_count].iloc[:, 1].values
+
+    if not xywh_format:
+        gt_bboxes[:, 2:] -= gt_bboxes[:, :2] 
+
 
     return gt_bboxes, gt_ids
 
@@ -250,10 +248,13 @@ def convert_tracks(hyp_obj_pair, track2cluster):
 
 def extrapolate_until_axes(precision, recall):
     """Extrapolate precision and recall arrays until axes (0,0) and (1,1)"""
-    p = precision.copy()
-    r = recall.copy()
-    p = [p[0]] + p + [0]
-    r = [0] + r + [r[-1]]
+    # raise LookupError("NOT CORRECT")
+
+    precision = list(precision)
+    recall = list(recall)
+
+    p = [precision[0]] + precision + [0]
+    r = [0] + recall + [recall[-1]]
     return p, r
 
 
@@ -265,65 +266,76 @@ def calculate_pr_auc(precision, recall):
     return auc_pr
 
 
-def save_pr_curve(precisions, recalls, fp_rate, fn_rate, results_path='./outputs', scale_factor=1.5):
+def get_pr_curve(precisions, recalls, fp_rate, fn_rate, results_path='./outputs', scale_factor=1.5):
     """Save img with precision/recall curve for end-to-end pipeline"""
+    
     path_to_save = os.path.join(results_path, 'MCMT_result.png')
+        
     AUC_PR = calculate_pr_auc(precisions, recalls)
-
-
+    detector_error, id_switch_error, reID_error = retrieve_errors(precisions, fp_rate, fn_rate, AUC_PR)
+    # fragmentation_error = 1 - recalls[0] - fn_rate
+    
     # Plot PR curve using Seaborn
-    sns.set_theme(style="whitegrid")
+    sns.set_theme(style="ticks", context="talk")
     plt.figure(figsize=(8*scale_factor, 6*scale_factor))
+    plt.style.use('seaborn-v0_8-whitegrid')
 
-    # Plot original precision-recall curve and fill area above it
-    sns.lineplot(x=recalls, y=precisions, label=f'End-to-end quality: {AUC_PR:.3f}', color='blue')
+    # Plot the step curve for precision-recall
+    plt.step(recalls, precisions, where='post', label=f'e2e score: {AUC_PR:.3f}', color='blue')
 
-    # Get the current axes
-    ax = plt.gca()
+    x_data = []
+    y_data = []
+    for i in range(len(precisions)-1):
+        x_data.extend([recalls[i], recalls[i+1]])
+        y_data.extend([precisions[i], precisions[i]])
 
-    # Get the lines from the plot
-    lines = ax.get_lines()
+    x_data.append(recalls[-1])
+    y_data.append(precisions[-1])
 
-    # Extract data points from the curve
-    x_data = lines[0].get_xdata()
-    y_data = lines[0].get_ydata()
+    x_data = np.array(x_data)
+    y_data = np.array(y_data)
 
     plt.axhline(y=precisions[0], xmax=recalls[-1], color='black', linestyle='--')
-    plt.axhline(y=precisions[0] + fp_rate, xmax=recalls[-1], color='black', linestyle='--')
+    plt.axhline(y=precisions[0] + id_switch_error, xmax=recalls[-1], color='black', linestyle='--')
 
-    detector_error, tracker_error, reID_error = retrieve_errors(precisions, fp_rate, fn_rate, AUC_PR)
+    plt.axvline(x=recalls[-1], ymax=precisions[0] + id_switch_error, color='black', linestyle='--')
+    plt.axvline(x=recalls[-1], ymax=precisions[0] + id_switch_error, color='black', linestyle='--')
 
-    plt.axvline(x=recalls[-1], ymax=precisions[0] + tracker_error, color='black', linestyle='--')
 
-    x, y1, y2  = [0, recalls[-1]], precisions[0], precisions[0] + tracker_error
-    plt.fill_between(x, y1, y2, color='yellow', alpha=0.3, label=f'Tracker Error: {tracker_error:.3f}')
+    x, y1, y2  = [0, recalls[-1]], precisions[0], precisions[0] + id_switch_error
+    plt.fill_between(x, y1, y2, color='yellow', alpha=0.3, label=f'Tracker Error: {id_switch_error:.3f}')
+
 
     x, y1, y2 = [recalls[-1], 1], 0, 1
-    plt.fill_between([recalls[-1], 1], 0, 1, color='red', alpha=0.3, label=f'Detector Error: {detector_error:.3f}')
+    plt.fill_between([recalls[-1], 1], 0, 1, color='salmon', alpha=0.5, label=f'Detector Error: {detector_error:.3f}')
 
-    x, y1, y2 = [0, recalls[-1]], precisions[0] + fp_rate, 1
-    plt.fill_between(x, y1, y2, color='red', alpha=0.3)
 
-    x, y1, y2 = x_data, y_data, y_data[0]
-    plt.fill_between(x, y1, y2, color='cyan', alpha=0.3, label=f're-ID Error: {reID_error:.3f}')
+    x, y1, y2 = [0, recalls[-1]], precisions[0] + id_switch_error, 1
+    plt.fill_between(x, y1, y2, color='salmon', alpha=0.5)
+
+    plt.fill_between(x_data, y_data, precisions[0], color='lightsteelblue', alpha=1.0, label=f're-ID Error: {reID_error:.3f}')
 
     plt.ylabel('Precision', fontsize=12*scale_factor)
     plt.xlabel('Recall', fontsize=12*scale_factor)
     plt.legend(fontsize=18*scale_factor, loc='lower left')
+
     plt.title('MCMT: Errors Classification', fontsize=16*scale_factor)
     plt.ylim((0, 1.0))
     plt.xlim((0, 1.0))
 
     plt.savefig(path_to_save, bbox_inches='tight')
+    plt.savefig(path_to_save.replace('.png', '.pdf'), bbox_inches='tight')
     print(path_to_save)
+    return detector_error, id_switch_error, reID_error
+    
 
 def retrieve_errors(precisions, fp_rate, fn_rate, AUC_PR):
     """makes classification of errors"""
 
     detector_error = fn_rate + fp_rate
-    tracker_error = 1 - precisions[0] - fp_rate
-    reID_error = 1 - detector_error - tracker_error - AUC_PR 
-    return detector_error, tracker_error, reID_error
+    id_switch_error = 1 - precisions[0] - fp_rate
+    reID_error = 1 - detector_error - id_switch_error - AUC_PR 
+    return detector_error, id_switch_error, reID_error
 
 
 def get_metric(precision, recall):
@@ -336,48 +348,35 @@ def get_metric(precision, recall):
 
 
 def get_global_reid_model(args):
-    model_name = args.global_reid_model_name
-    model_wts_path = os.path.join('reid/weights', f"{args.global_reid_model_wts}.pth")
 
-    global_reid_model = FeatureExtractor(
-        model_name=model_name,
-        model_path=model_wts_path,
-        device='cuda',
-    )
+    if 'timm' in args.global_reid_model_name:
+        import timm
+        global_reid_model = timm.create_model('vit_huge_patch14_224.orig_in21k', pretrained=True, num_classes=0)
+        weights = '/ssd/r.musaev/atac/table/timm/vit/mae_vldb_full_100epoch_mae_vit_huge_patch14_64*8batch_0.75mask_70epoch__10epoch_baseline_KD_ensemble_v4_30T_0.85kd_alpha_teacher_head_init_unfreezed_super_ligh_v2_augm_0.05wdDecouple_1e-4lr_v2/experiment.pth'
+        state_dict = torch.load(weights, map_location='cpu')
+        global_reid_model.load_state_dict(state_dict)
+        global_reid_model = global_reid_model.cuda()
+        global_reid_model.eval()
+        
+    elif 'torchreid' in args.global_reid_model_name:
+        model_name = args.global_reid_model_name.split('torchreid_')[1]
+        global_reid_model = FeatureExtractor(
+            model_name=model_name,
+            # image_size=(256, 128),
+            model_path=args.reid_model_wts if args.reid_model_wts is not None else '',
+            device='cuda',
+        )
+        
     return global_reid_model
 
 
-def check_is_roi(bbox, roi):
-    xmin = bbox[0]
-    ymin = bbox[1]
-    xmax = bbox[0] + bbox[2]
-    ymax = bbox[1] + bbox[3]
-    height, width = roi.shape
-
-    if xmin >= 0 and xmin < width:
-        if ymin >= 0 and ymin < height and roi[ymin, xmin] == 255:
-            return True
-        if ymax >= 0 and ymax < height and roi[ymax, xmin] == 255:
-            return True
-    if xmax >= 0 and xmax < width:
-        if ymin >= 0 and ymin < height and roi[ymin, xmax] == 255:
-            return True
-        if ymax >= 0 and ymax < height and roi[ymax, xmax] == 255:
-            return True
-
-    return False
-
-def draw_tracking_results(frame, tracks, colors):
-    if len(tracks) > 0:
-        frame = annotate(frame, tracks, colors)
-    # cv2.putText(
-    #     frame,
-    #     f"FPS: {fps:.1f}",
-    #     (int(20), int(40)),
-    #     fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-    #     fontScale=1,
-    #     color=(0, 0, 255),
-    #     thickness=2,
-    #     lineType=cv2.LINE_AA
-    # )
+def draw_tracking_results(frame, pred_bboxes, pred_ids, colors):
+    if len(pred_bboxes) > 0:
+        frame = annotate(frame, pred_bboxes, pred_ids, colors)
     return frame
+
+
+def aggregate_top_n_descriptors(group, top_N=15):
+    top_n_descriptors = group.head(top_N)['desc_reid'].tolist()
+    mean_descriptor = np.mean(np.stack(top_n_descriptors), axis=0)
+    return mean_descriptor

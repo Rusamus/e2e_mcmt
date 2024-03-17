@@ -3,7 +3,7 @@ from collections import Counter, defaultdict
 
 def bcubed_eval(pairs):
     """
-    Cluster evaluation function based on https://link.springer.com/article/10.1007/s10791-008-9066-8
+    Clusters evaluation based on https://link.springer.com/article/10.1007/s10791-008-9066-8
 
     Params
     ------

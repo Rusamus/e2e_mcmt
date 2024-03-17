@@ -1,7 +1,5 @@
 import ast
 import glob
-import json
-import os
 
 import numpy as np
 import pandas as pd
@@ -13,12 +11,13 @@ from utils import (
     convert_tracks,
     get_metric,
     normalize,
-    save_pr_curve
+    get_pr_curve,
+    aggregate_top_n_descriptors
 )
 from bcubed_eval import bcubed_eval
 
 
-def evaluate(output_dir, hyp_obj_pairs):
+def evaluate(args, output_dir, hyp_obj_pairs):
     """Core evaluation function.
 
     Parameters:
@@ -35,14 +34,6 @@ def evaluate(output_dir, hyp_obj_pairs):
     descriptors = []
     index2track = {}
     index = 0
-    f1_max = 0.0
-
-    df_mcmt = pd.DataFrame(
-        columns=[
-            'fr_num', 'id', 'bbleft', 'bbtop',
-            'bbox_width', 'bbox_height', 'det_score', 'class'
-        ]
-    )
 
     for num_camera, camera_hyp in enumerate(sorted(glob.glob(f"{output_dir}/*.txt"))):
         df = pd.read_csv(
@@ -55,15 +46,16 @@ def evaluate(output_dir, hyp_obj_pairs):
             index_col=False
         )
 
-        df_sbst = df[['fr_num', 'id', 'bbleft', 'bbtop',
-                      'bbox_width', 'bbox_height', 'det_score', 'class']]
-
-        df_sbst['id'] = df_sbst['id'].apply(lambda x: f"{x}_c{num_camera}")
-        df_mcmt = pd.concat([df_mcmt, df_sbst])
-
-        # Re-ID preparation: agg and normalize
+        # aggregate Re-ID features within traklet id and normalize then
         df['desc_reid'] = df['desc_reid'].apply(lambda x: np.array(ast.literal_eval(x)))
-        df = df.groupby('id')['desc_reid'].agg('mean')
+        df = df.sort_values(by=['id', 'det_score'], ascending=[True, False])
+
+        tracklet = df.groupby('id')
+        if args.det_score_agg:
+            df = tracklet.apply(aggregate_top_n_descriptors)
+        else:
+            df = tracklet['desc_reid'].agg('mean')
+
         df = df.apply(lambda x: normalize(x))
 
         tracks = [f"{x}_c{num_camera}" for x in df.keys()]
@@ -75,12 +67,14 @@ def evaluate(output_dir, hyp_obj_pairs):
         descs = np.vstack(df.values.tolist())
         descriptors.append(descs)
 
+    print('Calculating pairwise tracklets distances...')
     descriptors = np.vstack(descriptors)
     dist = pairwise_distances(descriptors, metric='euclidean')
 
+    print('Calculating BCubed metrics...')
     # Loop for h -> clustering -> precision/recall
     precision, recall = [], []
-    sample_rate = 100
+    sample_rate = 1000
     thresholds = np.linspace(dist.min(), dist.max(), sample_rate)
 
     for threshold in tqdm(thresholds):
@@ -91,31 +85,20 @@ def evaluate(output_dir, hyp_obj_pairs):
         precision.append(precision_h)
         recall.append(recall_h)
 
-        f1_score = 2 * (precision_h * recall_h) / (precision_h + recall_h)
-        if f1_score > f1_max:
-            f1_max = f1_score
-            df_mcmt['id_global'] = df_mcmt['id'].apply(lambda x: track2cluster[x])
-            df_mcmt.to_csv(os.path.join(output_dir, "computed_mcmt.csv"), index=False)
-
-    aidp, aidr, aidf1, auc_pr = get_metric(precision, recall)
+    AP, AR, AF1, auc_pr = get_metric(precision, recall)
     fp_rate = fpr_h
     fn_rate = fnr_h
 
-    print("\n-------------------- Evaluation Metrics: --------------------")
-    print(f"Average ID Precision (AIDP): {aidp:.3f} ")
-    print(f"Average ID Recall (AIDR): {aidr:.3f}")
-    print(f"Average ID F1 (AIDF1): {aidf1:.3f}")
-    print(f"AUC PR: {auc_pr:.3f}")
-    print("--------------------")
+    errors = get_pr_curve(precision, recall, fp_rate, fn_rate, results_path=output_dir)
+    detector_error, id_switch_error, reID_error = errors
 
     metrics = {
-        "AIDP": aidp,
-        "AIDR": aidr,
-        "AIDF1": aidf1,
-        "AUC_PR": auc_pr
+        "AP": AP,
+        "AR": AR,
+        "AF1": AF1,
+        "AUC_PR": auc_pr,
+        "detector_error": detector_error,
+        "id_switch_error": id_switch_error,
+        "reID_error": reID_error
     }
-
-    with open(os.path.join(output_dir, "metrics_mcmt.json"), "w") as f:
-        json.dump(metrics, f, indent=4)
-
-    save_pr_curve(precision, recall, fp_rate, fn_rate, results_path=output_dir)
+    return metrics

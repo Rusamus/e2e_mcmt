@@ -142,3 +142,10 @@ reid/
 deep-person-reid/
 *.ipynb
 mmtracking/
+pipeline_mmtracking_VL.py
+pipeline_mmtracking_gt.py
+models_weigths/
+arhive_outputs2/
+arhive_outputs/
+pipeline_deepsort.py
+.gitignore
