@@ -15,8 +15,8 @@ def bcubed_eval(pairs):
 
     Returns
     ------
-    (mean_p, mean_r, mean_fp): tuple
-        Mean (precision, recall, false positive rate) per threshold
+    (mean_p, mean_r, mean_fp, mean_fn): tuple
+        Mean (precision, recall, fpr, fnr) per threshold
     """
     h2o = defaultdict(list)
     o2h = defaultdict(list)

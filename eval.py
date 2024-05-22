@@ -6,6 +6,7 @@ import json
 
 from coco_classes import COCO_91_CLASSES
 from mot_tracker import mot_tracker
+from mot_gt import mot_gt
 
 from src import evaluate
 
@@ -32,6 +33,7 @@ def parse_arguments():
     parser.add_argument('--device', default=DEVICE_DEFAULT, help='Device to use for computation.')
     parser.add_argument('--det_score_agg', action='store_true', help='Whether to aggregate top n reID descriptors.')
     parser.add_argument('--xywh_format', default=True, type=bool, help='gt boxes format')
+    parser.add_argument('--use_gt', action='store_true', help='flag to pass gt tracklets for re-ID ')
     return parser.parse_args()
 
 
@@ -58,7 +60,10 @@ def main():
     hyp_obj_pairs = []
 
     for num_camera, camera in enumerate(cameras):
-        pairs = mot_tracker(args, camera, out_dir, colors, num_camera)
+        if args.use_gt:
+            pairs = mot_gt(args, camera, out_dir, colors, num_camera)
+        else:
+            pairs = mot_tracker(args, camera, out_dir, colors, num_camera)
         hyp_obj_pairs.extend(pairs)
 
     metrics = evaluate(args, out_dir, hyp_obj_pairs)

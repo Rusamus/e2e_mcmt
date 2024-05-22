@@ -258,30 +258,20 @@ def extrapolate_until_axes(precision, recall):
     return p, r
 
 
-def calculate_pr_auc(precision, recall):
-    """Calculate PR AUC (area under PR curve)"""
+def get_pr_curve(precisions, recalls, auc_pr, detector_error, id_switch_error, reID_error,
+                 reID_error_rel, results_path='./outputs', scale_factor=1.5):
     
-    precision, recall = extrapolate_until_axes(precision, recall)
-    auc_pr = np.trapz(precision, recall)
-    return auc_pr
-
-
-def get_pr_curve(precisions, recalls, fp_rate, fn_rate, results_path='./outputs', scale_factor=1.5):
     """Save img with precision/recall curve for end-to-end pipeline"""
     
     path_to_save = os.path.join(results_path, 'MCMT_result.png')
-        
-    AUC_PR = calculate_pr_auc(precisions, recalls)
-    detector_error, id_switch_error, reID_error = retrieve_errors(precisions, fp_rate, fn_rate, AUC_PR)
-    # fragmentation_error = 1 - recalls[0] - fn_rate
-    
+            
     # Plot PR curve using Seaborn
     sns.set_theme(style="ticks", context="talk")
     plt.figure(figsize=(8*scale_factor, 6*scale_factor))
     plt.style.use('seaborn-v0_8-whitegrid')
 
     # Plot the step curve for precision-recall
-    plt.step(recalls, precisions, where='post', label=f'e2e score: {AUC_PR:.3f}', color='blue')
+    plt.step(recalls, precisions, where='post', label=f'e2e score: {auc_pr:.3f}', color='blue')
 
     x_data = []
     y_data = []
@@ -313,7 +303,9 @@ def get_pr_curve(precisions, recalls, fp_rate, fn_rate, results_path='./outputs'
     x, y1, y2 = [0, recalls[-1]], precisions[0] + id_switch_error, 1
     plt.fill_between(x, y1, y2, color='salmon', alpha=0.5)
 
+
     plt.fill_between(x_data, y_data, precisions[0], color='lightsteelblue', alpha=1.0, label=f're-ID Error: {reID_error:.3f}')
+    plt.fill_between(x_data, y_data, precisions[0], color='lightsteelblue', alpha=1.0, label=f're-ID Error w.r.t UpperBound: {reID_error_rel:.3f}')
 
     plt.ylabel('Precision', fontsize=12*scale_factor)
     plt.xlabel('Recall', fontsize=12*scale_factor)
@@ -324,27 +316,37 @@ def get_pr_curve(precisions, recalls, fp_rate, fn_rate, results_path='./outputs'
     plt.xlim((0, 1.0))
 
     plt.savefig(path_to_save, bbox_inches='tight')
-    plt.savefig(path_to_save.replace('.png', '.pdf'), bbox_inches='tight')
+    # plt.savefig(path_to_save.replace('.png', '.pdf'), bbox_inches='tight')
     print(path_to_save)
-    return detector_error, id_switch_error, reID_error
     
 
-def retrieve_errors(precisions, fp_rate, fn_rate, AUC_PR):
+def get_errors(precisions, recalls, fp_rate, fn_rate, auc_pr, reID_error):
     """makes classification of errors"""
 
     detector_error = fn_rate + fp_rate
     id_switch_error = 1 - precisions[0] - fp_rate
-    reID_error = 1 - detector_error - id_switch_error - AUC_PR 
-    return detector_error, id_switch_error, reID_error
+
+    # det_error = (1 - precisions[0]) * recalls[-1] + (1 - recalls[-1]) * 1
+    import sys; sys.breakpointhook()
+    assert detector_error + id_switch_error + auc_pr + reID_error == 1
+
+    return detector_error, id_switch_error
 
 
-def get_metric(precision, recall):
-    """Provides final evaluation and returns AP, AR, AF1,
+def get_metric(precisions, recalls):
+    """Provides with final evaluation and returns AP, AR, AF1,
     error_per_module, plot"""
-    f1_scores = [2 * (p * r) / (p + r) for p, r in zip(precision, recall)]
+    f1_scores = [2 * (p * r) / (p + r) for p, r in zip(precisions, recalls)]
 
-    auc_pr = calculate_pr_auc(precision, recall)
-    return np.mean(precision), np.mean(recall), np.mean(f1_scores), auc_pr
+    auc_pr = np.trapz(precisions, recalls) # approximated area under curve (AUC)
+    import sys; sys.breakpointhook()
+
+    reID_error = np.trapz((max(recalls) - np.array(recalls[::-1])), precisions[::-1]) 
+
+    UpperBound_area = precisions[0] * recalls[-1]
+    reID_error_rel = reID_error / UpperBound_area
+
+    return np.mean(precisions), np.mean(recalls), np.mean(f1_scores), auc_pr, reID_error, reID_error_rel
 
 
 def get_global_reid_model(args):

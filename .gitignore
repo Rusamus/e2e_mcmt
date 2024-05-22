@@ -147,5 +147,6 @@ pipeline_mmtracking_gt.py
 models_weigths/
 arhive_outputs2/
 arhive_outputs/
+outputs_final_version/
 pipeline_deepsort.py
 .gitignore

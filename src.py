@@ -12,7 +12,9 @@ from utils import (
     get_metric,
     normalize,
     get_pr_curve,
-    aggregate_top_n_descriptors
+    aggregate_top_n_descriptors,
+    extrapolate_until_axes,
+    get_errors
 )
 from bcubed_eval import bcubed_eval
 
@@ -25,7 +27,7 @@ def evaluate(args, output_dir, hyp_obj_pairs):
         hyp_obj_pairs (list): Logic:
 
         - Creates dict1: track_camera -> [bbox1, bbox2, ...]
-        - Runs re-ID for each bbox: 
+        - Runs re-ID for each bbox
         - dict2[track_camera] += l2 normalized descriptor * 1/len(track_camera)
         - Matrix similarity -> Clustering (h) -> B-cubed evaluation (ground truth used) -> Returns AP + plot.
 
@@ -85,12 +87,19 @@ def evaluate(args, output_dir, hyp_obj_pairs):
         precision.append(precision_h)
         recall.append(recall_h)
 
-    AP, AR, AF1, auc_pr = get_metric(precision, recall)
+    precision, recall = extrapolate_until_axes(precision, recall)  # align with x-y axes
+    AP, AR, AF1, auc_pr, reID_error, reID_error_rel = get_metric(precision, recall)
     fp_rate = fpr_h
     fn_rate = fnr_h
 
-    errors = get_pr_curve(precision, recall, fp_rate, fn_rate, results_path=output_dir)
-    detector_error, id_switch_error, reID_error = errors
+    np.savetxt(f"{output_dir}/precision.txt", precision)
+    np.savetxt(f"{output_dir}/recall.txt", recall)
+
+    detector_error, id_switch_error = get_errors(precision, recall, fp_rate, fn_rate, auc_pr, reID_error)
+
+    get_pr_curve(precision, recall, auc_pr, detector_error, id_switch_error,
+                 reID_error, reID_error_rel,
+                 results_path=output_dir)
 
     metrics = {
         "AP": AP,
@@ -99,6 +108,7 @@ def evaluate(args, output_dir, hyp_obj_pairs):
         "AUC_PR": auc_pr,
         "detector_error": detector_error,
         "id_switch_error": id_switch_error,
-        "reID_error": reID_error
+        "reID_error": reID_error,
+        "reID_error_wrt_upper_bound": reID_error_rel
     }
     return metrics
