@@ -1,63 +1,45 @@
-# Multi-Camera Multi-Target Tracking System
+# Multi-Camera Tracking Error Analysis
 
-This repository contains code for a multi-camera multi-target tracking (MCMT) system using object detection, tracking, and re-identification.
+![Framework Overview](image.png)  
+*Figure 1: System pipeline with error decomposition modules*
 
-## System Overview
-
-The system pipeline consists of:
-
-- Object detection - Detects objects in each camera frame using a RetinaNet model
-- Tracking - Associates detections into tracks for each camera using DeepSORT 
-- Re-identification - Embeds tracklet features using a torchreid model and matches tracklets across cameras
-
-## Installation
-
-Clone the repository:
+## Quick Setup
 
 ```bash
-https://github.com/Rusamus/mmcmt_metric.git
-```
-
-Install dependencies:
-
-```bash 
+git clone https://github.com/Rusamus/mmcmt_metric.git
+cd mmcmt_metric
 pip install -r requirements.txt
+mkdir -p models && wget -P models/ \
+  https://example.com/retinanet.pth \
+  https://example.com/deepsort.pth \
+  https://example.com/osnet_ibn.pth
 ```
 
-Download pretrained models from:
-
-- [RetinaNet model](https://example.com)
-- [DeepSORT model](https://example.com)
-- [Torchreid model](https://example.com) 
-
-Place the models in the `models/` directory.
-
-## Usage
-
-To run tracking evaluation method on a dataset:
+## Basic Usage
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python3 eval.py --input_folder /path/to/dataset --mode retinanet_resnet50_fpn_v2 --embedder torchreid --global_reid_model_wts osnet_ibn_x1_0_msmt17_combineall_256x128_amsgrad_ep150_stp60_lr0.0015_b64_fb10_softmax_labelsmooth_flip_jitter --cls 1 2 3  
+python eval.py \
+  --input_dir ./data \
+  --output_dir ./results \
+  --classes 1 2  # Person, vehicle
 ```
 
-This will perform detection, tracking, re-id and output tracking results to `outputs/`.  
+## Key Metrics
 
-See `eval.py` for additional parameters.
-Evaluation code computes novel MMCMT metric as well as ID Precision, ID Recall, ID F1 Score
+| Metric        | Description                          |
+|---------------|--------------------------------------|
+| **Det-FP**    | False positive detection rate        |
+| **Track-IDSW**| Identity switches in tracking        | 
+| **ReID-FN**   | Cross-camera re-identification misses|
 
-## References
-
-Ristani et al. "Performance measures and a data set for multi-target, multi-camera tracking", ECCV 2016.
 
 ## Citation
 
-```
-@article{mypaper,
-  title={My Method for Multi-Camera Multi-Target Tracking}, 
-  author={My Name},
-  journal={arXiv},
+```bibtex
+@article{musaev2024mcmt,
+  title={Disentangling Errors in Multi-Camera Tracking Systems},
+  author={Musaev, Ruslan},
+  journal={arXiv preprint arXiv:XXXX.XXXXX},
   year={2024}
 }
 ```
-
-Let me know if you have any other questions!
